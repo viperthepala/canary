@@ -65,8 +65,8 @@ private:
 	void loadConfigLua();
 	void validateDatapack();
 	void initializeDatabase();
+	void loadThisWorld();
 	void loadModules();
-	void setWorldType();
 	void loadMaps() const;
 	void setupHousesRent();
 	void modulesLoadHelper(bool loaded, std::string moduleName);
