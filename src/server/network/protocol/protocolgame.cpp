@@ -1315,6 +1315,9 @@ void ProtocolGame::parsePacketFromDispatcher(NetworkMessage &msg, uint8_t recvby
 		case 0xC0:
 			parseForgeBrowseHistory(msg);
 			break;
+		case 0xC8:
+			parseSelectSpellAimProtocol(msg);
+			break;
 		case 0xC9: /* update tile */
 			break;
 		case 0xCA:
@@ -2308,14 +2311,14 @@ void ProtocolGame::sendHighscores(const std::string &selectedWorld, const std::v
 
 	uint32_t selectedVocation = 0xFFFFFFFF;
 	const auto vocationsMap = g_vocations().getVocations();
-	for (const auto &it : vocationsMap) {
-		const auto &vocation = it.second;
-		if (vocation->getFromVocation() == static_cast<uint32_t>(vocation->getId())) {
-			msg.add<uint32_t>(vocation->getFromVocation()); // Vocation Id
-			msg.addString(vocation->getVocName()); // Vocation Name
+	for (const auto &[currentVocationId, vocationPtr] : vocationsMap) {
+		const uint32_t currentVocationBaseId = vocationPtr->getBaseId();
+		if (vocationPtr->getFromVocation() == static_cast<uint32_t>(currentVocationId)) {
+			msg.add<uint32_t>(currentVocationBaseId); // Vocation Id
+			msg.addString(vocationPtr->getVocName()); // Vocation Name
 			++vocations;
-			if (vocation->getFromVocation() == vocationId) {
-				selectedVocation = vocationId;
+			if (currentVocationBaseId == vocationBaseId) {
+				selectedVocation = vocationBaseId;
 			}
 		}
 	}
@@ -4398,6 +4401,7 @@ void ProtocolGame::sendCyclopediaCharacterDefenceStats() {
 	msg.add<uint16_t>(static_cast<uint16_t>(player->getReflectFlat(COMBAT_PHYSICALDAMAGE)));
 
 	msg.add<uint16_t>(player->getArmor());
+	msg.add<uint16_t>(player->getMantraTotal());
 
 	const auto shieldingSkill = player->getSkillLevel(SKILL_SHIELD);
 	const uint16_t defenseWheel = player->wheel().getMajorStatConditional("Combat Mastery", WheelMajor_t::DEFENSE);
@@ -6370,13 +6374,31 @@ void ProtocolGame::sendMarketDetail(uint16_t itemId, uint8_t tier) {
 				chance = (0.4 * tier * tier) + (1.7 * tier) + 0.4;
 				ss << fmt::format("{} ({:.2f}% Amplification)", static_cast<uint16_t>(tier), chance);
 			}
+			msg.addString(it.elementalBond);
+			if (it.mantra > 0) {
+				msg.addString(std::to_string(it.mantra));
+			} else {
+				msg.add<uint16_t>(0x00); // no mantra
+			}
 			msg.addString(ss.str());
 		} else if (it.upgradeClassification > 0 && tier == 0) {
 			msg.addString(std::to_string(it.upgradeClassification));
+			msg.addString(it.elementalBond);
+			if (it.mantra > 0) {
+				msg.addString(std::to_string(it.mantra));
+			} else {
+				msg.add<uint16_t>(0x00); // no mantra
+			}
 			msg.addString(std::to_string(tier));
 		} else {
-			msg.add<uint16_t>(0x00);
-			msg.add<uint16_t>(0x00);
+			msg.add<uint16_t>(0x00); // no classification
+			msg.addString(it.elementalBond);
+			if (it.mantra > 0) {
+				msg.addString(std::to_string(it.mantra));
+			} else {
+				msg.add<uint16_t>(0x00); // no mantra
+			}
+			msg.add<uint16_t>(0x00); // no tier
 		}
 	}
 
@@ -7275,7 +7297,7 @@ void ProtocolGame::sendInventoryIds() {
 	for (uint16_t i = 1; i <= 11; i++) {
 		msg.add<uint16_t>(i);
 		msg.addByte(0x00);
-		msg.add<uint16_t>(0x01);
+		msg.addByte(0x01);
 	}
 
 	uint16_t totalItemsCount = 0;
@@ -7283,7 +7305,17 @@ void ProtocolGame::sendInventoryIds() {
 		for (const auto [tier, count] : item) {
 			msg.add<uint16_t>(itemId);
 			msg.addByte(tier);
-			msg.add<uint16_t>(static_cast<uint16_t>(count));
+			if (count < 0x40) {
+				msg.addByte(count);
+			} else if (count < 0x4000) {
+				msg.addByte((count >> 8) + 64);
+				msg.addByte(count & 0xFF);
+			} else {
+				msg.addByte(0x80);
+				msg.addByte((count >> 16) & 0xFF);
+				msg.addByte((count >> 8) & 0xFF);
+				msg.addByte(count & 0xFF);
+			}
 			totalItemsCount++;
 		}
 	}
@@ -8299,6 +8331,7 @@ void ProtocolGame::AddPlayerSkills(NetworkMessage &msg) {
 
 	msg.add<uint16_t>(player->getDefense(true));
 	msg.add<uint16_t>(player->getArmor());
+	msg.add<uint16_t>(player->getMantraTotal());
 	msg.addDouble(player->getMitigation() / 100.); // Mitigation
 	msg.addDouble(getForgeSkillStat(CONST_SLOT_ARMOR)); // Dodge (Ruse)
 	msg.add<uint16_t>(static_cast<uint16_t>(player->getReflectFlat(COMBAT_PHYSICALDAMAGE))); // Damage Reflection
@@ -10129,4 +10162,54 @@ void ProtocolGame::sendHousesInfo() {
 	}
 
 	writeToOutputBuffer(msg);
+}
+
+void ProtocolGame::sendHarmonyProtocol(const uint8_t harmonyValue) {
+	NetworkMessage msg;
+	msg.addByte(0xC1);
+	msg.addByte(0x00);
+	msg.addByte(harmonyValue);
+	writeToOutputBuffer(msg);
+}
+
+void ProtocolGame::sendSereneProtocol(const bool isSerene) {
+	NetworkMessage msg;
+	msg.addByte(0xC1);
+	msg.addByte(0x01);
+	msg.addByte(isSerene ? 0x01 : 0x00);
+	writeToOutputBuffer(msg);
+}
+
+void ProtocolGame::sendVirtueProtocol(const uint8_t virtueValue) {
+	NetworkMessage msg;
+	msg.addByte(0xC1);
+	msg.addByte(0x02);
+	switch (virtueValue) {
+		case 1:
+			msg.addByte(0x01); // Virtue of Harmony
+			break;
+		case 2:
+			msg.addByte(0x02); // Virtue of Justice
+			break;
+		case 3:
+			msg.addByte(0x03); // Virtue of Sustain
+			break;
+	}
+	writeToOutputBuffer(msg);
+}
+
+void ProtocolGame::parseSelectSpellAimProtocol(NetworkMessage &msg) {
+	if (!player->canDoAimAction()) {
+		player->sendCancelMessage("You need to wait to do this again.");
+		return;
+	}
+
+	const uint8_t spellListSize = msg.getByte();
+	for (auto i = 1; i <= spellListSize; i++) {
+		const uint16_t spellId = msg.get<uint16_t>();
+		const uint8_t spellAim = msg.getByte();
+		player->spellActivedAimMap[spellId] = spellAim;
+	}
+
+	player->setNextExAction(OTSYS_TIME() + g_configManager().getNumber(ACTIONS_DELAY_INTERVAL) - 10);
 }

@@ -530,6 +530,11 @@ private:
 	void parseSaveWheel(NetworkMessage &msg);
 	void parseWheelGemAction(NetworkMessage &msg);
 
+	void sendHarmonyProtocol(const uint8_t harmonyValue);
+	void sendSereneProtocol(const bool isSerene);
+	void sendVirtueProtocol(const uint8_t virtueValue);
+	void parseSelectSpellAimProtocol(NetworkMessage &msg);
+
 	friend class Player;
 	friend class PlayerWheel;
 	friend class PlayerVIP;
